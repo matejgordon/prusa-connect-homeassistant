@@ -6,6 +6,8 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Mapping
+from contextlib import suppress
+from ipaddress import ip_address
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -17,13 +19,16 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
-from homeassistant.const import CONF_TOKEN, CONF_URL
+from homeassistant.const import CONF_HOST, CONF_TOKEN, CONF_URL
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -51,7 +56,7 @@ from .const import (
     PRODUCT_NAME,
 )
 from .coordinator import PrusaConnectConfigEntry
-from .embedded import browser_url, embedded_server, release_settings
+from .embedded import browser_url, default_host, embedded_server, host_options, release_settings
 from .library import (
     SCOPE_OPERATE,
     ApiError,
@@ -76,13 +81,6 @@ URL_SCHEMA = vol.Schema({vol.Required(CONF_URL): TextSelector(TextSelectorConfig
 TOKEN_SCHEMA = vol.Schema(
     {vol.Required(CONF_TOKEN): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))}
 )
-PORT_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_PORT, default=DEFAULT_PORT): NumberSelector(
-            NumberSelectorConfig(min=1024, max=65535, step=1, mode=NumberSelectorMode.BOX)
-        )
-    }
-)
 # How often the flow asks whether the first-run wizard has finished.
 FIRST_RUN_POLL = 3
 
@@ -96,6 +94,14 @@ def normalize_url(url: str) -> str:
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ValueError(url)
     return f"{parts.scheme}://{parts.netloc}".rstrip("/")
+
+
+def normalize_host(raw: str) -> str:
+    """A host name or IP address, also taken out of a pasted address."""
+    raw = raw.strip()
+    with suppress(ValueError):
+        return str(ip_address(raw.strip("[]")))
+    return str(urlsplit(normalize_url(raw)).hostname)
 
 
 def _host_port(url: str) -> tuple[str, int]:
@@ -121,6 +127,7 @@ class PrusaConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         self._server_id: str | None = None
         self._mode = MODE_EXTERNAL
         self._port = DEFAULT_PORT
+        self._host: str | None = None
         self._server: EmbeddedServer | None = None
         self._task: asyncio.Task[Any] | None = None
         self._open = False
@@ -261,10 +268,30 @@ class PrusaConnectConfigFlow(ConfigFlow, domain=DOMAIN):
     # -- the server inside Home Assistant -----------------------------------
 
     async def async_step_embedded(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Ask which port the server listens on; printers and browsers reach it there."""
+        """Ask which port the server listens on, and at which address browsers reach this machine."""
         self._async_abort_entries_match({CONF_MODE: MODE_EMBEDDED})
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_PORT, default=DEFAULT_PORT): NumberSelector(
+                    NumberSelectorConfig(min=1024, max=65535, step=1, mode=NumberSelectorMode.BOX)
+                ),
+                vol.Required(CONF_HOST, default=default_host(self.hass)): SelectSelector(
+                    SelectSelectorConfig(
+                        options=host_options(self.hass), custom_value=True, mode=SelectSelectorMode.DROPDOWN
+                    )
+                ),
+            }
+        )
         if user_input is None:
-            return self.async_show_form(step_id="embedded", data_schema=PORT_SCHEMA)
+            return self.async_show_form(step_id="embedded", data_schema=schema)
+        try:
+            self._host = normalize_host(user_input[CONF_HOST])
+        except ValueError:
+            return self.async_show_form(
+                step_id="embedded",
+                data_schema=self.add_suggested_values_to_schema(schema, user_input),
+                errors={CONF_HOST: "invalid_host"},
+            )
         self._mode = MODE_EMBEDDED
         self._port = int(user_input[CONF_PORT])
         self._server = embedded_server(self.hass, self._port)
@@ -326,7 +353,7 @@ class PrusaConnectConfigFlow(ConfigFlow, domain=DOMAIN):
                 step_id="first_run",
                 progress_action="first_run",
                 description_placeholders={
-                    "url": browser_url(self.hass, self._port),
+                    "url": self._browser_base(),
                     "code": self._server.setup_code() or "",
                 },
                 progress_task=self._task,
@@ -349,11 +376,15 @@ class PrusaConnectConfigFlow(ConfigFlow, domain=DOMAIN):
             return self._async_create("")
         return await self.async_step_pair()
 
+    def _browser_base(self) -> str:
+        """The embedded server as the browser reaches it."""
+        return browser_url(self._host or default_host(self.hass), self._port)
+
     def _browser(self, url: str) -> str:
         """A link the server made for itself, as the browser reaches the embedded server."""
         if self._mode != MODE_EMBEDDED:
             return url
-        parts, base = urlsplit(url), urlsplit(browser_url(self.hass, self._port))
+        parts, base = urlsplit(url), urlsplit(self._browser_base())
         return urlunsplit((base.scheme, base.netloc, parts.path, parts.query, parts.fragment))
 
     @callback
@@ -444,6 +475,7 @@ class PrusaConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         }
         if self._mode == MODE_EMBEDDED:
             data[CONF_PORT] = self._port
+            data[CONF_HOST] = self._host
         if self._fingerprint:
             data[CONF_FINGERPRINT] = self._fingerprint
         self._finished = True
@@ -471,6 +503,7 @@ class PrusaConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         if entry_data.get(CONF_MODE) == MODE_EMBEDDED:
             self._mode = MODE_EMBEDDED
             self._port = entry_data.get(CONF_PORT, DEFAULT_PORT)
+            self._host = entry_data.get(CONF_HOST)
             self._finished = True
         return await self.async_step_reauth_confirm()
 

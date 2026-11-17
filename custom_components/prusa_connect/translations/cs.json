@@ -12,12 +12,14 @@
       },
       "embedded": {
         "title": "Spustit Prusa Connect v Home Assistantu",
-        "description": "Home Assistant stáhne nejnovější release Prusa Connect, ověří jeho podpis a spustí ho. Tiskárny i váš prohlížeč ho najdou na adrese Home Assistantu a tomto portu.",
+        "description": "Home Assistant stáhne nejnovější verzi Prusa Connect, ověří její podpis a spustí ji. Tiskárny i váš prohlížeč se k serveru připojí na adrese a portu níže.",
         "data": {
-          "port": "Port"
+          "port": "Port",
+          "host": "Adresa zařízení s Home Assistantem"
         },
         "data_description": {
-          "port": "Port, který na tomto stroji nepoužívá žádná jiná služba."
+          "port": "Port, který na tomto stroji nepoužívá žádná jiná služba.",
+          "host": "Na této adrese se k serveru připojí tiskárny i váš prohlížeč. Vyberte IP adresu samotného zařízení. Reverzní proxy před Home Assistantem tento port nepřeposílá, takže její adresa tu fungovat nebude."
         }
       },
       "external": {
@@ -89,6 +91,7 @@
       "invalid_auth": "Token nebyl přijat",
       "insufficient_permissions": "Token nemá oprávnění číst tiskárny",
       "invalid_url": "Zadejte adresu http nebo https",
+      "invalid_host": "Zadejte název hostitele nebo IP adresu",
       "not_prusa_connect": "Tato adresa neodpovídá jako Prusa Connect",
       "certificate_changed": "Certifikát serveru už neodpovídá důvěryhodnému otisku",
       "unknown": "Neočekávaná chyba"

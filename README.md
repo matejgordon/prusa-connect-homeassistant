@@ -74,8 +74,11 @@ runs.
 
 ### Inside Home Assistant
 
-1. **Port.** Choose the port the server listens on (8080). Printers and browsers reach it at Home
-   Assistant's address and this port.
+1. **Port and address.** Choose the port the server listens on (8080) and the address of the device
+   running Home Assistant. Printers and browsers reach the server there. Home Assistant preselects the
+   device's own IP address and also offers its internal URL's host and `homeassistant.local`, or you can
+   type another. A reverse proxy in front of Home Assistant does not forward this port, so its address
+   will not work here.
 2. **Install.** Home Assistant downloads the newest release from the `prusa3d/prusa-connect` GitHub
    releases (alpha and beta included, see *Options*), checks the Ed25519 signature over `SHA256SUMS` with
    Prusa Connect's release key and the binary's SHA-256, and starts it. Nothing unsigned is ever run.

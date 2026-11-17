@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from homeassistant.components import frontend
-from homeassistant.const import CONF_URL
+from homeassistant.const import CONF_HOST, CONF_URL
 from homeassistant.core import HomeAssistant, callback
 
 from .const import (
@@ -18,7 +18,7 @@ from .const import (
     PRODUCT_NAME,
 )
 from .coordinator import PrusaConnectConfigEntry
-from .embedded import browser_url
+from .embedded import browser_url, default_host
 
 
 def panel_path(entry: PrusaConnectConfigEntry) -> str:
@@ -31,10 +31,11 @@ def default_panel_url(hass: HomeAssistant, entry: PrusaConnectConfigEntry) -> st
 
     An external server is where Home Assistant reaches it. The embedded one
     listens on Home Assistant's own host, which Home Assistant itself reaches
-    as 127.0.0.1.
+    as 127.0.0.1: the browser goes to the host picked at setup.
     """
     if entry.data.get(CONF_MODE) == MODE_EMBEDDED:
-        return browser_url(hass, entry.data.get(CONF_PORT, DEFAULT_PORT))
+        host = entry.data.get(CONF_HOST) or default_host(hass)
+        return browser_url(host, entry.data.get(CONF_PORT, DEFAULT_PORT))
     return str(entry.data[CONF_URL])
 
 

@@ -7,14 +7,16 @@ from collections.abc import Generator
 from unittest.mock import patch
 
 import pytest
+from homeassistant.components.http import ApiConfig
 from homeassistant.config_entries import SOURCE_USER, ConfigEntry, ConfigEntryState, ConfigFlowResult
-from homeassistant.const import CONF_TOKEN, CONF_URL
+from homeassistant.const import CONF_HOST, CONF_TOKEN, CONF_URL
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.prusa_connect.config_flow import normalize_host
 from custom_components.prusa_connect.const import (
     CONF_INSTANCE_ID,
     CONF_MODE,
@@ -23,7 +25,7 @@ from custom_components.prusa_connect.const import (
     DOMAIN,
     MODE_EMBEDDED,
 )
-from custom_components.prusa_connect.embedded import browser_url
+from custom_components.prusa_connect.embedded import browser_url, default_host, host_options
 from custom_components.prusa_connect.library import CannotConnectError
 from custom_components.prusa_connect.releases import ReleaseError
 from custom_components.prusa_connect.server import ServerError
@@ -108,6 +110,7 @@ async def test_embedded_flow(hass: HomeAssistant, mock_client: FakeClient, embed
     entry = _entry(hass)
     assert entry.data[CONF_MODE] == MODE_EMBEDDED
     assert entry.data[CONF_PORT] == 8080
+    assert entry.data[CONF_HOST] == "192.168.1.5"
     assert entry.data[CONF_URL] == embedded.url
     assert entry.data[CONF_TOKEN] == "pcl_paired"
     assert entry.unique_id == "server-1"
@@ -237,14 +240,18 @@ async def test_reconfigure_has_no_address(
 async def test_reauth_pairs_through_the_browser_address(
     hass: HomeAssistant, mock_client: FakeClient, embedded: FakeEmbedded
 ) -> None:
-    hass.config.internal_url = "http://192.168.1.5:8123"
+    # Home Assistant behind a reverse proxy: the link goes to the machine, not the proxy.
+    hass.config.internal_url = "https://ha.example.com"
     embedded.version = "0.0.1-alpha.1"
     entry = _embedded_entry()
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
+    assert hass.config.api is not None
     result = await entry.start_reauth_flow(hass)
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "pair"})
-    assert result["description_placeholders"]["url"].startswith("http://192.168.1.5:8080/pair")
+    assert result["description_placeholders"]["url"].startswith(
+        f"http://{hass.config.api.local_ip}:8080/pair"
+    )
     mock_client.approve.set()
     await hass.async_block_till_done()
     result = await hass.config_entries.flow.async_configure(result["flow_id"])
@@ -312,7 +319,54 @@ async def test_options_offer_pre_releases_for_embedded(
     assert CONF_PRERELEASE in {str(key) for key in result["data_schema"].schema}
 
 
-async def test_browser_url(hass: HomeAssistant) -> None:
-    assert browser_url(hass, 8080) == "http://homeassistant.local:8080"
-    hass.config.internal_url = "http://[fd00::5]:8123"
-    assert browser_url(hass, 8099) == "http://[fd00::5]:8099"
+def test_browser_url() -> None:
+    assert browser_url("homeassistant.local", 8080) == "http://homeassistant.local:8080"
+    assert browser_url("fd00::5", 8099) == "http://[fd00::5]:8099"
+
+
+async def test_host_guess_and_options(hass: HomeAssistant) -> None:
+    assert default_host(hass) == "homeassistant.local"
+    assert host_options(hass) == ["homeassistant.local"]
+    # Behind a reverse proxy the internal URL names the proxy: the machine's own address wins.
+    hass.config.internal_url = "https://ha.example.com"
+    hass.config.api = ApiConfig("192.168.1.5", "192.168.1.5", 8123, False)
+    assert default_host(hass) == "192.168.1.5"
+    assert host_options(hass) == ["192.168.1.5", "ha.example.com", "homeassistant.local"]
+    # A loopback address reaches no browser: the internal URL is the guess after all.
+    hass.config.api = ApiConfig("127.0.0.1", "127.0.0.1", 8123, False)
+    assert default_host(hass) == "ha.example.com"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("192.168.1.5", "192.168.1.5"),
+        (" printer-box.lan ", "printer-box.lan"),
+        ("http://192.168.1.5:8080/", "192.168.1.5"),
+        ("fd00::5", "fd00::5"),
+        ("[fd00::5]", "fd00::5"),
+    ],
+)
+def test_normalize_host(raw: str, expected: str) -> None:
+    assert normalize_host(raw) == expected
+
+
+async def test_embedded_flow_at_a_picked_host(
+    hass: HomeAssistant, mock_client: FakeClient, embedded: FakeEmbedded
+) -> None:
+    hass.config.internal_url = "https://ha.example.com"
+    mock_client.first_run.clear()
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "embedded"})
+    flow_id = result["flow_id"]
+    result = await hass.config_entries.flow.async_configure(flow_id, {CONF_PORT: 8080, CONF_HOST: "ftp://"})
+    assert result["errors"] == {CONF_HOST: "invalid_host"}
+    await hass.config_entries.flow.async_configure(flow_id, {CONF_PORT: 8080, CONF_HOST: "10.0.0.7"})
+    await _wait_for(hass, flow_id, "first_run")
+    result = await hass.config_entries.flow.async_configure(flow_id)
+    assert result["description_placeholders"]["url"] == "http://10.0.0.7:8080"
+    mock_client.first_run.set()
+    await _wait_for(hass, flow_id, "first_run_done")
+    result = await hass.config_entries.flow.async_configure(flow_id)
+    assert result["description_placeholders"]["url"] == "http://10.0.0.7:8080/pair?code=BCDF-GHJK"
+    hass.config_entries.flow.async_abort(flow_id)

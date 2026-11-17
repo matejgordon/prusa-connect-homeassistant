@@ -12,12 +12,14 @@
       },
       "embedded": {
         "title": "Run Prusa Connect inside Home Assistant",
-        "description": "Home Assistant downloads the newest Prusa Connect release, checks its signature and runs it. Printers and your browser reach it at Home Assistant's address and this port.",
+        "description": "Home Assistant downloads the newest Prusa Connect release, checks its signature and runs it. Printers and your browser connect to it at the address and port below.",
         "data": {
-          "port": "Port"
+          "port": "Port",
+          "host": "Address of the Home Assistant device"
         },
         "data_description": {
-          "port": "A port no other service on this machine uses."
+          "port": "A port no other service on this machine uses.",
+          "host": "Printers and your browser connect to the server at this address. Use the IP address of the device itself. A reverse proxy in front of Home Assistant does not forward this port, so its address will not work here."
         }
       },
       "external": {
@@ -89,6 +91,7 @@
       "invalid_auth": "The token was not accepted",
       "insufficient_permissions": "The token may not read printers",
       "invalid_url": "Enter an http or https address",
+      "invalid_host": "Enter a host name or an IP address",
       "not_prusa_connect": "This address does not answer like Prusa Connect",
       "certificate_changed": "The server's certificate no longer matches the trusted fingerprint",
       "unknown": "Unexpected error"
